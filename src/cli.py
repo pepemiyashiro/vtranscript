@@ -60,6 +60,17 @@ def cli():
     help='Disable GPU acceleration'
 )
 @click.option(
+    '--no-vad',
+    is_flag=True,
+    help='Disable Voice Activity Detection (VAD) for silent section skipping'
+)
+@click.option(
+    '--compute-type',
+    type=click.Choice(['int8', 'float16', 'float32', 'auto'], case_sensitive=False),
+    default='auto',
+    help='Computation precision (int8=fastest, float32=most accurate, auto=recommended)'
+)
+@click.option(
     '--config', '-c',
     type=click.Path(exists=True),
     help='Path to configuration file'
@@ -73,6 +84,8 @@ def transcribe(
     task: str,
     no_timestamps: bool,
     no_gpu: bool,
+    no_vad: bool,
+    compute_type: str,
     config: Optional[str]
 ):
     """Transcribe a single video file."""
@@ -162,6 +175,17 @@ def transcribe(
     is_flag=True,
     help='Disable GPU acceleration'
 )
+@click.option(
+    '--no-vad',
+    is_flag=True,
+    help='Disable Voice Activity Detection (VAD)'
+)
+@click.option(
+    '--compute-type',
+    type=click.Choice(['int8', 'float16', 'float32', 'auto'], case_sensitive=False),
+    default='auto',
+    help='Computation precision'
+)
 def batch(
     video_paths: tuple,
     output_dir: str,
@@ -170,16 +194,20 @@ def batch(
     language: Optional[str],
     task: str,
     no_timestamps: bool,
-    no_gpu: bool
+    no_gpu: bool,
+    no_vad: bool,
+    compute_type: str
 ):
     """Transcribe multiple video files."""
     
     try:
-        # Initialize transcriptor
+        # Initialize transcriptor with optimizations
         transcriptor = VideoTranscriptor(
             model_size=model,
             language=language,
             use_gpu=not no_gpu,
+            use_vad=not no_vad,
+            compute_type=compute_type,
             verbose=True
         )
         
@@ -237,6 +265,24 @@ def info():
     if torch.cuda.is_available():
         click.echo(f"  CUDA version: {torch.version.cuda}")
         click.echo(f"  GPU device: {torch.cuda.get_device_name(0)}")
+    
+    # Check for MPS (Apple Silicon)
+    if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        click.echo(f"  Apple Silicon MPS: Available")
+    
+    # Check for faster-whisper
+    try:
+        import faster_whisper
+        click.echo(f"  faster-whisper: {faster_whisper.__version__} (optimized)")
+    except ImportError:
+        click.echo(f"  faster-whisper: Not installed (using openai-whisper)")
+    
+    # Check for VAD
+    try:
+        torch.hub.load(repo_or_dir='snakers4/silero-vad', model='silero_vad', force_reload=False, verbose=False)
+        click.echo(f"  Silero VAD: Available")
+    except:
+        click.echo(f"  Silero VAD: Not available")
     
     click.echo()
 

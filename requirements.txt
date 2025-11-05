@@ -1,5 +1,8 @@
 # Core dependencies for video transcription
-openai-whisper>=20231117
+# Use faster-whisper for 4-10x speedup (will fall back to openai-whisper if not available)
+faster-whisper>=0.10.0
+# openai-whisper>=20231117  # Fallback option (uncomment if faster-whisper doesn't work)
+
 torch>=2.0.0
 torchaudio>=2.0.0
 
@@ -7,6 +10,9 @@ torchaudio>=2.0.0
 moviepy>=1.0.3
 imageio-ffmpeg>=0.4.9  # Bundled FFmpeg (no system install needed)
 pydub>=0.25.1
+
+# Voice Activity Detection (for skipping silent sections)
+# Silero-VAD is loaded via torch.hub, no explicit install needed
 
 # CLI and configuration
 click>=8.1.7
@@ -16,3 +22,4 @@ rich>=13.7.0  # For beautiful CLI output
 # Utilities
 tqdm>=4.66.0  # Progress bars
 python-dotenv>=1.0.0  # Environment variables
+numpy>=1.24.0

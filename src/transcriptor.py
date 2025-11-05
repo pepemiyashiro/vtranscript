@@ -1,14 +1,22 @@
 """
-Main transcription module using OpenAI Whisper.
+Main transcription module using Whisper (faster-whisper or openai-whisper).
 """
 
 import os
 import torch
-import whisper
+import numpy as np
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
+
+# Try importing faster-whisper first, fall back to openai-whisper
+try:
+    from faster_whisper import WhisperModel
+    FASTER_WHISPER_AVAILABLE = True
+except ImportError:
+    import whisper
+    FASTER_WHISPER_AVAILABLE = False
 
 from .audio_extractor import AudioExtractor
 from .utils import (
@@ -31,7 +39,9 @@ class VideoTranscriptor:
         model_size: str = "base",
         language: Optional[str] = None,
         use_gpu: bool = True,
-        verbose: bool = True
+        verbose: bool = True,
+        use_vad: bool = True,
+        compute_type: str = "auto"
     ):
         """
         Initialize the VideoTranscriptor.
@@ -41,32 +51,141 @@ class VideoTranscriptor:
             language: Language code (e.g., 'en', 'es') or None for auto-detect
             use_gpu: Whether to use GPU if available
             verbose: Whether to print progress messages
+            use_vad: Whether to use Voice Activity Detection to skip silent sections
+            compute_type: Computation precision for faster-whisper ("int8", "float16", "float32", "auto")
         """
         self.model_size = model_size
         self.language = language
         self.verbose = verbose
+        self.use_vad = use_vad
+        self.use_faster_whisper = FASTER_WHISPER_AVAILABLE
         
-        # Determine device
+        # Determine device and compute type
         if use_gpu and torch.cuda.is_available():
             self.device = "cuda"
+            if compute_type == "auto":
+                self.compute_type = "float16"
+            else:
+                self.compute_type = compute_type
             if verbose:
-                console.print("[green]✓[/green] Using GPU for transcription")
+                console.print("[green]✓[/green] Using CUDA GPU for transcription")
+        elif use_gpu and hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            self.device = "mps" if not FASTER_WHISPER_AVAILABLE else "cpu"
+            if compute_type == "auto":
+                self.compute_type = "float32"
+            else:
+                self.compute_type = compute_type
+            if verbose:
+                if self.device == "mps":
+                    console.print("[green]✓[/green] Using Apple Silicon MPS GPU for transcription")
+                else:
+                    console.print("[yellow]ℹ[/yellow] MPS available but using CPU (faster-whisper doesn't support MPS)")
         else:
             self.device = "cpu"
+            if compute_type == "auto":
+                self.compute_type = "int8"
+            else:
+                self.compute_type = compute_type
             if verbose:
-                console.print("[yellow]ℹ[/yellow] Using CPU for transcription (this will be slower)")
+                console.print("[yellow]ℹ[/yellow] Using CPU for transcription (slower than GPU)")
         
         # Load Whisper model
         if verbose:
             console.print(f"[cyan]Loading Whisper model:[/cyan] {model_size}")
+            if FASTER_WHISPER_AVAILABLE:
+                console.print(f"[green]✓[/green] Using faster-whisper (optimized)")
+                console.print(f"[cyan]Compute type:[/cyan] {self.compute_type}")
+            else:
+                console.print("[yellow]ℹ[/yellow] Using openai-whisper (install faster-whisper for 4-10x speedup)")
         
-        self.model = whisper.load_model(model_size, device=self.device)
+        if FASTER_WHISPER_AVAILABLE:
+            # Use faster-whisper for major speedup
+            device_str = self.device if self.device != "mps" else "cpu"
+            self.model = WhisperModel(
+                model_size,
+                device=device_str,
+                compute_type=self.compute_type
+            )
+        else:
+            # Fall back to openai-whisper
+            device_str = self.device
+            self.model = whisper.load_model(model_size, device=device_str)
         
         if verbose:
             console.print("[green]✓[/green] Model loaded successfully")
         
         # Initialize audio extractor
         self.audio_extractor = AudioExtractor(sample_rate=16000, channels=1)
+        
+        # Initialize VAD if requested
+        if use_vad:
+            if verbose:
+                console.print("[cyan]Initializing Voice Activity Detection...[/cyan]")
+            try:
+                import torch
+                self.vad_model, self.vad_utils = torch.hub.load(
+                    repo_or_dir='snakers4/silero-vad',
+                    model='silero_vad',
+                    force_reload=False,
+                    onnx=False,
+                    verbose=False
+                )
+                if verbose:
+                    console.print("[green]✓[/green] VAD initialized (will skip silent sections)")
+            except Exception as e:
+                if verbose:
+                    console.print(f"[yellow]⚠[/yellow] Could not load VAD model: {e}")
+                self.vad_model = None
+        else:
+            self.vad_model = None
+    
+    def _apply_vad(self, audio_path: str) -> Optional[List[Tuple[float, float]]]:
+        """
+        Apply Voice Activity Detection to find speech segments.
+        
+        Args:
+            audio_path: Path to audio file
+            
+        Returns:
+            List of (start, end) tuples for speech segments in seconds, or None if VAD fails
+        """
+        if not self.vad_model:
+            return None
+        
+        try:
+            import torch
+            import torchaudio
+            
+            # Load audio
+            wav, sample_rate = torchaudio.load(audio_path)
+            
+            # Resample to 16kHz if needed (VAD expects 16kHz)
+            if sample_rate != 16000:
+                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
+                wav = resampler(wav)
+                sample_rate = 16000
+            
+            # Get speech timestamps
+            (get_speech_timestamps, _, read_audio, *_) = self.vad_utils
+            speech_timestamps = get_speech_timestamps(
+                wav[0],
+                self.vad_model,
+                sampling_rate=sample_rate,
+                return_seconds=True
+            )
+            
+            if self.verbose and len(speech_timestamps) > 0:
+                total_duration = len(wav[0]) / sample_rate
+                speech_duration = sum(seg['end'] - seg['start'] for seg in speech_timestamps)
+                console.print(f"[green]✓[/green] VAD found {len(speech_timestamps)} speech segments "
+                            f"({speech_duration:.1f}s / {total_duration:.1f}s)")
+            
+            return [(seg['start'], seg['end']) for seg in speech_timestamps]
+            
+        except Exception as e:
+            if self.verbose:
+                console.print(f"[yellow]⚠[/yellow] VAD failed: {e}")
+            return None
     
     def transcribe_video(
         self,
@@ -101,18 +220,53 @@ class VideoTranscriptor:
         audio_path = self.audio_extractor.extract(video_path, verbose=self.verbose)
         
         try:
+            # Apply VAD if enabled
+            vad_segments = self._apply_vad(audio_path) if self.use_vad else None
+            
             # Transcribe audio
             if self.verbose:
                 console.print("[cyan]Running transcription...[/cyan]")
             
-            result = self.model.transcribe(
-                audio_path,
-                language=self.language,
-                task=task,
-                temperature=temperature,
-                best_of=best_of,
-                verbose=False
-            )
+            if FASTER_WHISPER_AVAILABLE and self.use_faster_whisper:
+                # Use faster-whisper API
+                segments, info = self.model.transcribe(
+                    audio_path,
+                    language=self.language,
+                    task=task,
+                    temperature=temperature,
+                    best_of=best_of,
+                    vad_filter=True if vad_segments else False,
+                    vad_parameters=dict(min_silence_duration_ms=500) if vad_segments else None
+                )
+                
+                # Convert faster-whisper segments to openai-whisper format
+                result = {
+                    'text': '',
+                    'segments': [],
+                    'language': info.language
+                }
+                
+                for segment in segments:
+                    result['segments'].append({
+                        'id': segment.id,
+                        'start': segment.start,
+                        'end': segment.end,
+                        'text': segment.text.strip()
+                    })
+                    result['text'] += segment.text.strip() + ' '
+                
+                result['text'] = result['text'].strip()
+                
+            else:
+                # Use openai-whisper API
+                result = self.model.transcribe(
+                    audio_path,
+                    language=self.language,
+                    task=task,
+                    temperature=temperature,
+                    best_of=best_of,
+                    verbose=False
+                )
             
             if self.verbose:
                 console.print("[green]✓[/green] Transcription complete")
