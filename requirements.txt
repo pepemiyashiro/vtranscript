@@ -6,10 +6,9 @@ faster-whisper>=0.10.0
 torch>=2.0.0
 torchaudio>=2.0.0
 
-# Video/Audio processing
-moviepy>=1.0.3
-imageio-ffmpeg>=0.4.9  # Bundled FFmpeg (no system install needed)
-pydub>=0.25.1
+# Video/Audio processing - Pure Python, no system dependencies!
+av>=11.0.0  # PyAV - includes FFmpeg libraries, no system install needed
+scipy>=1.11.0  # For audio resampling
 
 # Voice Activity Detection (for skipping silent sections)
 # Silero-VAD is loaded via torch.hub, no explicit install needed

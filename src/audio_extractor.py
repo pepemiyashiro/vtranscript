@@ -1,12 +1,14 @@
 """
-Audio extraction from video files.
+Audio extraction from video files using PyAV (pure Python, no system dependencies).
 """
 
 import os
 import tempfile
+import numpy as np
 from pathlib import Path
 from typing import Optional
-from moviepy import VideoFileClip
+import av
+import wave
 from rich.console import Console
 
 console = Console()
@@ -61,21 +63,55 @@ class AudioExtractor:
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
             
-            # Extract audio using moviepy
-            with VideoFileClip(video_path) as video:
-                audio = video.audio
-                if audio is None:
-                    raise RuntimeError("Video file has no audio track")
-                
-                # Write audio file
-                audio.write_audiofile(
-                    output_path,
-                    fps=self.sample_rate,
-                    nbytes=2,
-                    codec='pcm_s16le',
-                    verbose=False,
-                    logger=None
-                )
+            # Extract audio using PyAV
+            container = av.open(video_path)
+            
+            # Find audio stream
+            audio_stream = None
+            for stream in container.streams.audio:
+                audio_stream = stream
+                break
+            
+            if audio_stream is None:
+                container.close()
+                raise RuntimeError("Video file has no audio track")
+            
+            # Collect audio samples
+            audio_frames = []
+            for frame in container.decode(audio_stream):
+                # Convert frame to numpy array
+                array = frame.to_ndarray()
+                audio_frames.append(array)
+            
+            container.close()
+            
+            if not audio_frames:
+                raise RuntimeError("No audio data could be extracted")
+            
+            # Concatenate all frames
+            audio_data = np.concatenate(audio_frames, axis=1)
+            
+            # Convert to mono if needed
+            if audio_data.shape[0] > 1 and self.channels == 1:
+                audio_data = np.mean(audio_data, axis=0, keepdims=True)
+            
+            # Resample if needed
+            original_sample_rate = audio_stream.rate
+            if original_sample_rate != self.sample_rate:
+                import scipy.signal
+                num_samples = int(audio_data.shape[1] * self.sample_rate / original_sample_rate)
+                audio_data = scipy.signal.resample(audio_data, num_samples, axis=1)
+            
+            # Convert to int16 format
+            audio_data = audio_data.T  # Transpose to (samples, channels)
+            audio_data = np.clip(audio_data * 32767, -32768, 32767).astype(np.int16)
+            
+            # Write WAV file
+            with wave.open(output_path, 'wb') as wav_file:
+                wav_file.setnchannels(self.channels)
+                wav_file.setsampwidth(2)  # 2 bytes for int16
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(audio_data.tobytes())
             
             if verbose:
                 file_size = os.path.getsize(output_path) / (1024 * 1024)
@@ -120,20 +156,65 @@ class AudioExtractor:
             if output_dir:
                 os.makedirs(output_dir, exist_ok=True)
             
-            # Extract audio segment
-            with VideoFileClip(video_path) as video:
-                audio_segment = video.subclip(start_time, end_time).audio
-                if audio_segment is None:
-                    raise RuntimeError("Video segment has no audio track")
+            # Extract audio segment using PyAV
+            container = av.open(video_path)
+            
+            # Find audio stream
+            audio_stream = None
+            for stream in container.streams.audio:
+                audio_stream = stream
+                break
+            
+            if audio_stream is None:
+                container.close()
+                raise RuntimeError("Video segment has no audio track")
+            
+            # Seek to start time
+            container.seek(int(start_time * av.time_base))
+            
+            # Collect audio samples within the time range
+            audio_frames = []
+            for frame in container.decode(audio_stream):
+                frame_time = float(frame.pts * audio_stream.time_base)
                 
-                audio_segment.write_audiofile(
-                    output_path,
-                    fps=self.sample_rate,
-                    nbytes=2,
-                    codec='pcm_s16le',
-                    verbose=False,
-                    logger=None
-                )
+                if frame_time < start_time:
+                    continue
+                if frame_time > end_time:
+                    break
+                    
+                # Convert frame to numpy array
+                array = frame.to_ndarray()
+                audio_frames.append(array)
+            
+            container.close()
+            
+            if not audio_frames:
+                raise RuntimeError("No audio data could be extracted from segment")
+            
+            # Concatenate all frames
+            audio_data = np.concatenate(audio_frames, axis=1)
+            
+            # Convert to mono if needed
+            if audio_data.shape[0] > 1 and self.channels == 1:
+                audio_data = np.mean(audio_data, axis=0, keepdims=True)
+            
+            # Resample if needed
+            original_sample_rate = audio_stream.rate
+            if original_sample_rate != self.sample_rate:
+                import scipy.signal
+                num_samples = int(audio_data.shape[1] * self.sample_rate / original_sample_rate)
+                audio_data = scipy.signal.resample(audio_data, num_samples, axis=1)
+            
+            # Convert to int16 format
+            audio_data = audio_data.T  # Transpose to (samples, channels)
+            audio_data = np.clip(audio_data * 32767, -32768, 32767).astype(np.int16)
+            
+            # Write WAV file
+            with wave.open(output_path, 'wb') as wav_file:
+                wav_file.setnchannels(self.channels)
+                wav_file.setsampwidth(2)  # 2 bytes for int16
+                wav_file.setframerate(self.sample_rate)
+                wav_file.writeframes(audio_data.tobytes())
             
             if verbose:
                 console.print(f"[green]✓[/green] Audio segment extracted: {output_path}")

@@ -122,7 +122,6 @@ class VideoTranscriptor:
             if verbose:
                 console.print("[cyan]Initializing Voice Activity Detection...[/cyan]")
             try:
-                import torch
                 self.vad_model, self.vad_utils = torch.hub.load(
                     repo_or_dir='snakers4/silero-vad',
                     model='silero_vad',
@@ -153,29 +152,43 @@ class VideoTranscriptor:
             return None
         
         try:
-            import torch
-            import torchaudio
+            import scipy.io.wavfile
+            import scipy.signal
             
-            # Load audio
-            wav, sample_rate = torchaudio.load(audio_path)
+            # Load audio using scipy (works without additional dependencies)
+            sample_rate, audio_data = scipy.io.wavfile.read(audio_path)
+            
+            # Convert to float32 and normalize
+            if audio_data.dtype == np.int16:
+                audio_data = audio_data.astype(np.float32) / 32768.0
+            elif audio_data.dtype == np.int32:
+                audio_data = audio_data.astype(np.float32) / 2147483648.0
+            
+            # Handle stereo by converting to mono
+            if len(audio_data.shape) > 1:
+                audio_data = audio_data.mean(axis=1)
             
             # Resample to 16kHz if needed (VAD expects 16kHz)
             if sample_rate != 16000:
-                resampler = torchaudio.transforms.Resample(sample_rate, 16000)
-                wav = resampler(wav)
+                num_samples = int(len(audio_data) * 16000 / sample_rate)
+                audio_data = scipy.signal.resample(audio_data, num_samples)
                 sample_rate = 16000
+            
+            # Convert to torch tensor for VAD
+            import torch
+            wav_tensor = torch.from_numpy(audio_data).float()
             
             # Get speech timestamps
             (get_speech_timestamps, _, read_audio, *_) = self.vad_utils
             speech_timestamps = get_speech_timestamps(
-                wav[0],
+                wav_tensor,
                 self.vad_model,
                 sampling_rate=sample_rate,
                 return_seconds=True
             )
             
             if self.verbose and len(speech_timestamps) > 0:
-                total_duration = len(wav[0]) / sample_rate
+                total_duration = len(audio_data) / sample_rate
                 speech_duration = sum(seg['end'] - seg['start'] for seg in speech_timestamps)
                 console.print(f"[green]✓[/green] VAD found {len(speech_timestamps)} speech segments "
                             f"({speech_duration:.1f}s / {total_duration:.1f}s)")
