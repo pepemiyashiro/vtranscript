@@ -20,10 +20,19 @@ Get started with Video Transcriptor in minutes!
 
 ### Manual Installation
 
+**1. Create Virtual Environment:**
 ```bash
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+**2. Install Dependencies:**
+```bash
 pip install -r requirements.txt
+```
+
+**3. Install Package:**
+```bash
 pip install -e .
 ```
 
