@@ -37,8 +37,8 @@ python examples/example_usage.py
 ## Code Style Guidelines
 
 ### Python Version
-- **Required**: 3.11.9 (specified in `.python-version`)
-- **Minimum**: 3.11+
+- **Required**: Python 3.11 or later (specified in `.python-version`)
+- **Tested**: 3.11, 3.12, 3.13
 
 ### Import Organization
 

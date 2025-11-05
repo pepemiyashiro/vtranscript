@@ -35,7 +35,7 @@ vtranscribe transcribe video.mp4 --language en  # Fastest!
 
 ## Requirements
 
-- Python 3.11.9 (recommended)
+- Python 3.11+ (tested with 3.11, 3.12, 3.13)
 - CUDA-capable GPU (optional, but highly recommended for faster processing)
 
 **Note**: FFmpeg is automatically included via `imageio-ffmpeg` - no system installation required!
@@ -310,7 +310,7 @@ vtranscribe info
 ## Troubleshooting
 
 **Import errors during installation:**
-- Make sure you're using Python 3.11.9: `python --version`
+- Make sure you're using Python 3.11 or later: `python --version`
 - Activate your virtual environment
 - Update pip: `pip install --upgrade pip`
 
