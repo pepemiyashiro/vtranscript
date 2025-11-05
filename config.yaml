@@ -1,0 +1,27 @@
+# Video Transcriptor Configuration
+
+# Whisper model size: tiny, base, small, medium, large
+# Larger models are more accurate but slower and require more memory
+whisper:
+  model_size: base
+  language: null  # Auto-detect language, or specify like 'en', 'es', 'fr'
+  task: transcribe  # 'transcribe' or 'translate' (to English)
+
+# Audio extraction settings
+audio:
+  sample_rate: 16000  # Whisper works best with 16kHz
+  channels: 1  # Mono audio
+  format: wav
+
+# Output settings
+output:
+  default_format: txt  # txt, srt, json, or all
+  output_dir: ./transcriptions
+  include_timestamps: true
+  include_confidence: false
+
+# Processing settings
+processing:
+  batch_size: 1
+  use_gpu: true  # Use GPU if available (much faster)
+  verbose: true

@@ -1,0 +1,18 @@
+# Core dependencies for video transcription
+openai-whisper>=20231117
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Video/Audio processing
+moviepy>=1.0.3
+imageio-ffmpeg>=0.4.9  # Bundled FFmpeg (no system install needed)
+pydub>=0.25.1
+
+# CLI and configuration
+click>=8.1.7
+pyyaml>=6.0.1
+rich>=13.7.0  # For beautiful CLI output
+
+# Utilities
+tqdm>=4.66.0  # Progress bars
+python-dotenv>=1.0.0  # Environment variables
