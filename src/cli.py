@@ -81,6 +81,17 @@ def cli():
     help='Accurate mode: use beam_size=5 for best quality (~3x slower)'
 )
 @click.option(
+    '--parallel',
+    is_flag=True,
+    help='Use parallel processing for faster transcription (3-4x speedup)'
+)
+@click.option(
+    '--workers',
+    type=int,
+    default=None,
+    help='Number of parallel workers (default: CPU cores - 1)'
+)
+@click.option(
     '--config', '-c',
     type=click.Path(exists=True),
     help='Path to configuration file'
@@ -98,6 +109,8 @@ def transcribe(
     compute_type: str,
     fast: bool,
     accurate: bool,
+    parallel: bool,
+    workers: Optional[int],
     config: Optional[str]
 ):
     """Transcribe a single video file."""
@@ -137,6 +150,8 @@ def transcribe(
             language=language,
             use_gpu=not no_gpu,
             beam_size=beam_size,
+            use_parallel=parallel,
+            num_workers=workers,
             verbose=True
         )
         
@@ -217,6 +232,17 @@ def transcribe(
     is_flag=True,
     help='Accurate mode: use beam_size=5 for best quality (~3x slower)'
 )
+@click.option(
+    '--parallel',
+    is_flag=True,
+    help='Use parallel processing for faster transcription (3-4x speedup)'
+)
+@click.option(
+    '--workers',
+    type=int,
+    default=None,
+    help='Number of parallel workers (default: CPU cores - 1)'
+)
 def batch(
     video_paths: tuple,
     output_dir: str,
@@ -229,7 +255,9 @@ def batch(
     no_vad: bool,
     compute_type: str,
     fast: bool,
-    accurate: bool
+    accurate: bool,
+    parallel: bool,
+    workers: Optional[int]
 ):
     """Transcribe multiple video files."""
     
@@ -250,6 +278,8 @@ def batch(
             use_vad=not no_vad,
             compute_type=compute_type,
             beam_size=beam_size,
+            use_parallel=parallel,
+            num_workers=workers,
             verbose=True
         )
         

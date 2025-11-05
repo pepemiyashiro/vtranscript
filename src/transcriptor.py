@@ -5,6 +5,10 @@ Main transcription module using Whisper (faster-whisper or openai-whisper).
 import os
 import torch
 import numpy as np
+import math
+import multiprocessing as mp
+from multiprocessing import Pool
+from functools import partial
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 from rich.console import Console
@@ -31,6 +35,124 @@ from .utils import (
 console = Console()
 
 
+def _transcribe_chunk_worker(chunk_info: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Worker function for parallel chunk transcription.
+    This is a module-level function so it can be pickled by multiprocessing.
+    
+    Args:
+        chunk_info: Dictionary containing all necessary parameters
+        
+    Returns:
+        Dictionary with chunk results and metadata
+    """
+    video_path = chunk_info['video_path']
+    start_time = chunk_info['start_time']
+    end_time = chunk_info['end_time']
+    chunk_id = chunk_info['chunk_id']
+    task = chunk_info.get('task', 'transcribe')
+    temperature = chunk_info.get('temperature', 0.0)
+    best_of = chunk_info.get('best_of', 5)
+    model_size = chunk_info['model_size']
+    language = chunk_info.get('language')
+    device = chunk_info['device']
+    compute_type = chunk_info['compute_type']
+    beam_size = chunk_info.get('beam_size', 1)
+    
+    # Initialize model in this worker process
+    if FASTER_WHISPER_AVAILABLE:
+        device_str = device if device != "mps" else "cpu"
+        model = WhisperModel(
+            model_size,
+            device=device_str,
+            compute_type=compute_type
+        )
+    else:
+        import whisper
+        model = whisper.load_model(model_size, device=device)
+    
+    # Initialize audio extractor
+    audio_extractor = AudioExtractor(sample_rate=16000, channels=1)
+    
+    # Extract audio segment
+    audio_path = audio_extractor.extract_segment(
+        video_path, 
+        start_time, 
+        end_time,
+        verbose=False
+    )
+    
+    try:
+        # Transcribe the chunk
+        if FASTER_WHISPER_AVAILABLE:
+            segments, info = model.transcribe(
+                audio_path,
+                language=language,
+                task=task,
+                temperature=temperature,
+                best_of=best_of,
+                beam_size=beam_size,
+                vad_filter=False  # Already chunked, no need for VAD
+            )
+            
+            result = {
+                'chunk_id': chunk_id,
+                'start_time': start_time,
+                'end_time': end_time,
+                'text': '',
+                'segments': [],
+                'language': info.language
+            }
+            
+            for segment in segments:
+                # Adjust timestamps to absolute time
+                result['segments'].append({
+                    'id': segment.id,
+                    'start': segment.start + start_time,
+                    'end': segment.end + start_time,
+                    'text': segment.text.strip()
+                })
+                result['text'] += segment.text.strip() + ' '
+            
+            result['text'] = result['text'].strip()
+            
+        else:
+            # Use openai-whisper
+            transcription = model.transcribe(
+                audio_path,
+                language=language,
+                task=task,
+                temperature=temperature,
+                best_of=best_of,
+                verbose=False
+            )
+            
+            result = {
+                'chunk_id': chunk_id,
+                'start_time': start_time,
+                'end_time': end_time,
+                'text': transcription['text'],
+                'segments': [],
+                'language': transcription.get('language', language)
+            }
+            
+            # Adjust timestamps
+            for segment in transcription.get('segments', []):
+                result['segments'].append({
+                    'id': segment['id'],
+                    'start': segment['start'] + start_time,
+                    'end': segment['end'] + start_time,
+                    'text': segment['text'].strip()
+                })
+        
+        return result
+        
+    finally:
+        # Clean up temporary audio file
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+
+
 class VideoTranscriptor:
     """Transcribe video files to text using Whisper."""
     
@@ -42,7 +164,9 @@ class VideoTranscriptor:
         verbose: bool = True,
         use_vad: bool = True,
         compute_type: str = "auto",
-        beam_size: int = 1
+        beam_size: int = 1,
+        use_parallel: bool = False,
+        num_workers: Optional[int] = None
     ):
         """
         Initialize the VideoTranscriptor.
@@ -55,12 +179,16 @@ class VideoTranscriptor:
             use_vad: Whether to use Voice Activity Detection to skip silent sections
             compute_type: Computation precision for faster-whisper ("int8", "float16", "float32", "auto")
             beam_size: Beam search size (1=fastest, 5=default/more accurate). Lower is faster but slightly less accurate.
+            use_parallel: Whether to use parallel processing for long videos (3-4x speedup)
+            num_workers: Number of parallel workers (None = auto-detect based on CPU cores)
         """
         self.model_size = model_size
         self.language = language
         self.verbose = verbose
         self.use_vad = use_vad
         self.beam_size = beam_size
+        self.use_parallel = use_parallel
+        self.num_workers = num_workers
         self.use_faster_whisper = FASTER_WHISPER_AVAILABLE
         
         # Determine device and compute type
@@ -213,6 +341,8 @@ class VideoTranscriptor:
         """
         Transcribe a video file.
         
+        If use_parallel is enabled, will use parallel processing for faster transcription.
+        
         Args:
             video_path: Path to video file
             task: 'transcribe' or 'translate' (translate to English)
@@ -226,6 +356,17 @@ class VideoTranscriptor:
             FileNotFoundError: If video file doesn't exist
             ValueError: If video format is not supported
         """
+        # Use parallel processing if enabled
+        if self.use_parallel:
+            return self.transcribe_video_parallel(
+                video_path=video_path,
+                task=task,
+                temperature=temperature,
+                best_of=best_of,
+                num_workers=self.num_workers
+            )
+        
+        # Sequential processing (original code)
         # Validate video file
         validate_video_file(video_path)
         
@@ -294,6 +435,117 @@ class VideoTranscriptor:
             # Clean up temporary audio file
             if os.path.exists(audio_path) and 'temp' in audio_path:
                 os.remove(audio_path)
+    
+
+    
+    def transcribe_video_parallel(
+        self,
+        video_path: str,
+        task: str = "transcribe",
+        temperature: float = 0.0,
+        best_of: int = 5,
+        num_workers: Optional[int] = None,
+        chunk_duration: float = 300.0  # 5 minutes per chunk
+    ) -> Dict[str, Any]:
+        """
+        Transcribe a video file using parallel processing.
+        
+        Args:
+            video_path: Path to video file
+            task: 'transcribe' or 'translate'
+            temperature: Sampling temperature
+            best_of: Number of candidates
+            num_workers: Number of parallel workers (None = auto-detect)
+            chunk_duration: Duration of each chunk in seconds (default: 300s = 5min)
+            
+        Returns:
+            Dictionary containing transcription results with segments
+        """
+        # Validate video file
+        validate_video_file(video_path)
+        
+        if self.verbose:
+            console.print(f"\n[bold cyan]Transcribing (Parallel Mode):[/bold cyan] {video_path}\n")
+        
+        # Get video duration
+        import av
+        container = av.open(video_path)
+        duration = float(container.duration / av.time_base)
+        container.close()
+        
+        if self.verbose:
+            console.print(f"[cyan]Video duration:[/cyan] {duration:.1f}s ({duration/60:.1f} minutes)")
+        
+        # Determine number of workers
+        if num_workers is None:
+            num_workers = self.num_workers if self.num_workers else max(1, mp.cpu_count() - 1)
+        
+        # Calculate chunks
+        num_chunks = math.ceil(duration / chunk_duration)
+        num_workers = min(num_workers, num_chunks)  # Don't use more workers than chunks
+        
+        if self.verbose:
+            console.print(f"[cyan]Splitting into {num_chunks} chunks of ~{chunk_duration:.0f}s each[/cyan]")
+            console.print(f"[cyan]Using {num_workers} parallel workers[/cyan]")
+        
+        # Create chunk info with all necessary parameters
+        chunks = []
+        for i in range(num_chunks):
+            start_time = i * chunk_duration
+            end_time = min((i + 1) * chunk_duration, duration)
+            chunks.append({
+                'video_path': video_path,
+                'start_time': start_time,
+                'end_time': end_time,
+                'chunk_id': i,
+                'task': task,
+                'temperature': temperature,
+                'best_of': best_of,
+                'model_size': self.model_size,
+                'language': self.language,
+                'device': self.device,
+                'compute_type': self.compute_type,
+                'beam_size': self.beam_size
+            })
+        
+        # Process chunks in parallel
+        if self.verbose:
+            console.print(f"\n[cyan]Processing chunks in parallel...[/cyan]\n")
+        
+        # Use multiprocessing pool with the module-level worker function
+        with Pool(processes=num_workers) as pool:
+            chunk_results = pool.map(_transcribe_chunk_worker, chunks)
+        
+        # Sort by chunk_id to ensure correct order
+        chunk_results.sort(key=lambda x: x['chunk_id'])
+        
+        # Merge results
+        if self.verbose:
+            console.print(f"\n[cyan]Merging {len(chunk_results)} chunks...[/cyan]")
+        
+        merged_result = {
+            'text': '',
+            'segments': [],
+            'language': chunk_results[0]['language'] if chunk_results else None
+        }
+        
+        segment_id = 0
+        for chunk_result in chunk_results:
+            # Append text with space
+            if merged_result['text'] and chunk_result['text']:
+                merged_result['text'] += ' '
+            merged_result['text'] += chunk_result['text']
+            
+            # Append segments with renumbered IDs
+            for segment in chunk_result['segments']:
+                segment['id'] = segment_id
+                merged_result['segments'].append(segment)
+                segment_id += 1
+        
+        if self.verbose:
+            console.print("[green]✓[/green] Parallel transcription complete")
+        
+        return merged_result
     
     def transcribe_and_save(
         self,

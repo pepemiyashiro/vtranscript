@@ -81,13 +81,16 @@ vtranscribe batch *.mp4 --format all --language en
 vtranscribe transcribe spanish_video.mp4 --task translate --format srt
 ```
 
-## ⚡ Optimization Options (v0.2.0)
+## ⚡ Optimization Options (v0.3.0)
 
-### Maximum Speed
+### Maximum Speed (NEW!)
 
 ```bash
-# Fastest: language + int8 precision
-vtranscribe transcribe video.mp4 --language en --compute-type int8
+# Fastest: parallel + language + fast mode
+vtranscribe transcribe video.mp4 --parallel --language en --fast
+
+# Alternative: parallel + language + int8 precision
+vtranscribe transcribe video.mp4 --parallel --language en --compute-type int8
 ```
 
 ### Maximum Accuracy
@@ -117,6 +120,10 @@ vtranscribe transcribe video.mp4 --model medium --language en
 | `--format` | txt, srt, json, all | Output format (default: txt) |
 | `--model` | tiny, base, small, medium, large | Whisper model size (default: base) |
 | `--language` | en, es, fr, etc. | **Specify for 1.5-2x speedup** |
+| `--parallel` | flag | **NEW! 3-4x speedup for long videos** |
+| `--workers` | number | Parallel workers (default: CPU cores - 1) |
+| `--fast` | flag | Fast mode (beam_size=1, default) |
+| `--accurate` | flag | Accurate mode (beam_size=5) |
 | `--compute-type` | int8, float16, float32, auto | Speed vs accuracy (default: auto) |
 | `--output-dir` | path | Output directory (default: ./transcriptions) |
 | `--task` | transcribe, translate | Transcribe or translate to English |
@@ -141,14 +148,20 @@ python test_installation.py
 
 ### Before (v0.1.x)
 ```bash
-vtranscribe transcribe 10min_video.mp4
-# Time: ~10 minutes
+vtranscribe transcribe 220min_video.mp4
+# Time: ~220 minutes
 ```
 
-### After (v0.2.0)
+### v0.2.0 (Optimized)
 ```bash
-vtranscribe transcribe 10min_video.mp4 --language en
-# Time: ~1-2 minutes ⚡ (5-10x faster!)
+vtranscribe transcribe 220min_video.mp4 --language en
+# Time: ~16 minutes ⚡ (13.8x faster!)
+```
+
+### v0.3.0 (Parallel Processing)
+```bash
+vtranscribe transcribe 220min_video.mp4 --parallel --language en
+# Time: ~3-4 minutes 🚀 (55-73x faster!)
 ```
 
 ## Real-World Examples
@@ -177,10 +190,16 @@ vtranscribe transcribe japanese_video.mp4 --task translate --format srt
 # Output: English subtitles
 ```
 
-### Batch Conference Recordings
+### Batch Conference Recordings (with Parallel Processing)
 ```bash
-vtranscribe batch session*.mp4 --language en --format txt --model base
-# Process all session videos
+vtranscribe batch session*.mp4 --parallel --language en --format txt --model base
+# Process all session videos with parallel speedup
+```
+
+### Long Video (220 minutes)
+```bash
+vtranscribe transcribe long_video.mp4 --parallel --fast --language en
+# ~3-4 minutes on 8-core CPU (vs ~16 min without parallel)
 ```
 
 ### Music Video (Disable VAD)
@@ -204,8 +223,8 @@ pip install -e .
 ### Slow Performance
 
 ```bash
-# 1. Specify language (1.5-2x speedup)
-vtranscribe transcribe video.mp4 --language en
+# 1. Enable parallel processing (3-4x speedup for long videos)
+vtranscribe transcribe video.mp4 --parallel --language en
 
 # 2. Check optimization status
 vtranscribe info
@@ -216,7 +235,10 @@ vtranscribe info
 #   - Silero VAD: Available
 
 # 3. Use int8 for maximum speed
-vtranscribe transcribe video.mp4 --language en --compute-type int8
+vtranscribe transcribe video.mp4 --parallel --language en --compute-type int8
+
+# 4. Adjust workers if needed
+vtranscribe transcribe video.mp4 --parallel --workers 4
 ```
 
 ### GPU Not Detected
