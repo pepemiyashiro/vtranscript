@@ -41,7 +41,8 @@ class VideoTranscriptor:
         use_gpu: bool = True,
         verbose: bool = True,
         use_vad: bool = True,
-        compute_type: str = "auto"
+        compute_type: str = "auto",
+        beam_size: int = 1
     ):
         """
         Initialize the VideoTranscriptor.
@@ -53,11 +54,13 @@ class VideoTranscriptor:
             verbose: Whether to print progress messages
             use_vad: Whether to use Voice Activity Detection to skip silent sections
             compute_type: Computation precision for faster-whisper ("int8", "float16", "float32", "auto")
+            beam_size: Beam search size (1=fastest, 5=default/more accurate). Lower is faster but slightly less accurate.
         """
         self.model_size = model_size
         self.language = language
         self.verbose = verbose
         self.use_vad = use_vad
+        self.beam_size = beam_size
         self.use_faster_whisper = FASTER_WHISPER_AVAILABLE
         
         # Determine device and compute type
@@ -248,6 +251,7 @@ class VideoTranscriptor:
                     task=task,
                     temperature=temperature,
                     best_of=best_of,
+                    beam_size=self.beam_size,
                     vad_filter=True if vad_segments else False,
                     vad_parameters=dict(min_silence_duration_ms=500) if vad_segments else None
                 )

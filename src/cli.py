@@ -71,6 +71,16 @@ def cli():
     help='Computation precision (int8=fastest, float32=most accurate, auto=recommended)'
 )
 @click.option(
+    '--fast',
+    is_flag=True,
+    help='Fast mode: use beam_size=1 for ~3x speed (already default)'
+)
+@click.option(
+    '--accurate',
+    is_flag=True,
+    help='Accurate mode: use beam_size=5 for best quality (~3x slower)'
+)
+@click.option(
     '--config', '-c',
     type=click.Path(exists=True),
     help='Path to configuration file'
@@ -86,9 +96,19 @@ def transcribe(
     no_gpu: bool,
     no_vad: bool,
     compute_type: str,
+    fast: bool,
+    accurate: bool,
     config: Optional[str]
 ):
     """Transcribe a single video file."""
+    
+    # Check for conflicting flags
+    if fast and accurate:
+        click.echo("Error: --fast and --accurate are mutually exclusive", err=True)
+        raise click.Abort()
+    
+    # Determine beam_size based on flags
+    beam_size = 5 if accurate else 1  # Default is 1 (fast mode)
     
     # Load configuration if provided
     if config:
@@ -116,6 +136,7 @@ def transcribe(
             model_size=model,
             language=language,
             use_gpu=not no_gpu,
+            beam_size=beam_size,
             verbose=True
         )
         
@@ -186,6 +207,16 @@ def transcribe(
     default='auto',
     help='Computation precision'
 )
+@click.option(
+    '--fast',
+    is_flag=True,
+    help='Fast mode: use beam_size=1 for ~3x speed (already default)'
+)
+@click.option(
+    '--accurate',
+    is_flag=True,
+    help='Accurate mode: use beam_size=5 for best quality (~3x slower)'
+)
 def batch(
     video_paths: tuple,
     output_dir: str,
@@ -196,9 +227,19 @@ def batch(
     no_timestamps: bool,
     no_gpu: bool,
     no_vad: bool,
-    compute_type: str
+    compute_type: str,
+    fast: bool,
+    accurate: bool
 ):
     """Transcribe multiple video files."""
+    
+    # Check for conflicting flags
+    if fast and accurate:
+        click.echo("Error: --fast and --accurate are mutually exclusive", err=True)
+        raise click.Abort()
+    
+    # Determine beam_size based on flags
+    beam_size = 5 if accurate else 1  # Default is 1 (fast mode)
     
     try:
         # Initialize transcriptor with optimizations
@@ -208,6 +249,7 @@ def batch(
             use_gpu=not no_gpu,
             use_vad=not no_vad,
             compute_type=compute_type,
+            beam_size=beam_size,
             verbose=True
         )
         
