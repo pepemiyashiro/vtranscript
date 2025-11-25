@@ -3,6 +3,9 @@ Main transcription module using Whisper (faster-whisper or openai-whisper).
 """
 
 import os
+import sys
+import signal
+import atexit
 import torch
 import numpy as np
 import math
@@ -75,14 +78,15 @@ def _transcribe_chunk_worker(chunk_info: Dict[str, Any]) -> Dict[str, Any]:
     audio_extractor = AudioExtractor(sample_rate=16000, channels=1)
     
     # Extract audio segment
-    audio_path = audio_extractor.extract_segment(
-        video_path, 
-        start_time, 
-        end_time,
-        verbose=False
-    )
-    
+    audio_path = None
     try:
+        audio_path = audio_extractor.extract_segment(
+            video_path, 
+            start_time, 
+            end_time,
+            verbose=False
+        )
+        
         # Transcribe the chunk
         if FASTER_WHISPER_AVAILABLE:
             segments, info = model.transcribe(
@@ -147,10 +151,18 @@ def _transcribe_chunk_worker(chunk_info: Dict[str, Any]) -> Dict[str, Any]:
         
         return result
         
+    except Exception as e:
+        # Log the error and re-raise
+        console.print(f"[red]✗[/red] Error processing chunk {chunk_id}: {e}")
+        raise
     finally:
-        # Clean up temporary audio file
-        if os.path.exists(audio_path):
-            os.remove(audio_path)
+        # Clean up temporary audio file - ensure it's always removed
+        if audio_path and os.path.exists(audio_path):
+            try:
+                os.remove(audio_path)
+            except Exception as cleanup_error:
+                # Log cleanup errors but don't fail the whole process
+                console.print(f"[yellow]⚠[/yellow] Warning: Failed to clean up {audio_path}: {cleanup_error}")
 
 
 class VideoTranscriptor:
@@ -512,9 +524,28 @@ class VideoTranscriptor:
         if self.verbose:
             console.print(f"\n[cyan]Processing chunks in parallel...[/cyan]\n")
         
-        # Use multiprocessing pool with the module-level worker function
-        with Pool(processes=num_workers) as pool:
+        # Use multiprocessing pool with explicit cleanup
+        pool = None
+        try:
+            pool = Pool(processes=num_workers)
             chunk_results = pool.map(_transcribe_chunk_worker, chunks)
+        except KeyboardInterrupt:
+            if self.verbose:
+                console.print("\n[yellow]⚠[/yellow] Interrupted by user, cleaning up...")
+            if pool:
+                pool.terminate()
+                pool.join()
+            raise
+        except Exception as e:
+            if pool:
+                pool.terminate()
+                pool.join()
+            raise
+        finally:
+            # Explicit cleanup to prevent semaphore leaks
+            if pool:
+                pool.close()
+                pool.join()
         
         # Sort by chunk_id to ensure correct order
         chunk_results.sort(key=lambda x: x['chunk_id'])
