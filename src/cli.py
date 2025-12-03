@@ -149,6 +149,7 @@ def transcribe(
             model_size=model,
             language=language,
             use_gpu=not no_gpu,
+            use_vad=not no_vad,
             beam_size=beam_size,
             use_parallel=parallel,
             num_workers=workers,

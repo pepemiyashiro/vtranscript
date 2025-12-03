@@ -6,6 +6,7 @@ import os
 import sys
 import signal
 import atexit
+import tempfile
 import torch
 import numpy as np
 import math
@@ -71,7 +72,6 @@ def _transcribe_chunk_worker(chunk_info: Dict[str, Any]) -> Dict[str, Any]:
             compute_type=compute_type
         )
     else:
-        import whisper
         model = whisper.load_model(model_size, device=device)
     
     # Initialize audio extractor
@@ -444,8 +444,8 @@ class VideoTranscriptor:
             return result
             
         finally:
-            # Clean up temporary audio file
-            if os.path.exists(audio_path) and 'temp' in audio_path:
+            # Clean up temporary audio file (only if it's in the system temp directory)
+            if os.path.exists(audio_path) and audio_path.startswith(tempfile.gettempdir()):
                 os.remove(audio_path)
     
 
